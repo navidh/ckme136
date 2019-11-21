@@ -1,0 +1,182 @@
+
+library(tidyverse)
+library(lubridate)
+library(arulesViz)
+library(tseries)
+library(forecast)
+library(fUnitRoots)
+library(dplyr)
+library(PSF)
+
+retail<-read.csv(file="C:/Users/Navid/Desktop/online_retail_II_combined.csv",header=T,sep=",")
+
+str(retail)
+head(retail)
+tail(retail)
+summary(retail)
+
+retail %>% 
+  map(., ~sum(is.na(.)))
+
+names(retail)[1]<-"InvoiceNum"
+names(retail)[7]<-"CustomerID"
+
+rc <- retail[complete.cases(retail), ]
+
+rc %>% 
+  map(., ~sum(is.na(.)))
+
+summary(rc)
+
+rcm <- rc %>%
+  mutate(InvoiceDate = mdy_hm(InvoiceDate)) %>% 
+  mutate(Description = factor(Description, levels = unique(Description))) %>%
+  mutate(Country = factor(Country, levels = unique(Country)))%>%
+  mutate(InvoiceNum = factor(InvoiceNum, levels = unique(InvoiceNum))) %>%
+  mutate(TotalPrice = Quantity * Price) %>%
+  mutate(IncomeReturn = ifelse(Quantity > 0, "Income", "Return")) %>%
+  mutate(mnth = month(InvoiceDate)) %>%
+  mutate(yr = year(InvoiceDate)) %>%
+  mutate(dy = day(InvoiceDate)) %>%
+  mutate(day_of_week = wday(InvoiceDate))%>%
+  mutate(DisDate = as.Date.factor(InvoiceDate)) %>%
+  mutate(wk = trunc((DisDate - ymd(20091201))/dweeks(1))) %>%
+  mutate(ordmonth = ifelse(yr == 2009, 1, ifelse(yr==2010, mnth+1, mnth+13)))
+
+summary(rcm)
+
+mostvalued_product <- rcm %>% 
+  group_by(Description) %>%
+  summarize(value_of_product = sum(TotalPrice)) %>% 
+  arrange(desc(value_of_product))
+
+top20_valued_products <- mostvalued_product %>% 
+  top_n(n = 20, wt = value_of_product)
+
+mostsold_product <- rcm %>% 
+  group_by(Description) %>%
+  summarize(total_units_sold = sum(Quantity)) %>% 
+  arrange(desc(total_units_sold)) 
+
+top20_mostsoldproducts <- mostsold_product %>% 
+  top_n(n = 20, wt = total_units_sold)
+
+by_mostvaluable_customer <- rcm %>% 
+  group_by(CustomerID) %>%
+  summarize(customer_amount = sum(TotalPrice)) %>% 
+  arrange(desc(customer_amount))
+
+summary(by_mostvaluable_customer)
+
+plot(by_mostvaluable_customer)
+
+trans_trend <- rcm %>%
+  group_by(InvoiceNum)%>%
+  summarize(invoice_rev = sum(TotalPrice))%>%
+  plot(trans_trend)
+trans_trend
+
+data_with_month <- rcm %>%
+  group_by(mnth)%>%
+  summarize(monthwise_totalrevenue = sum(TotalPrice))%>%
+  ggplot()+
+  geom_bar(mapping = aes(x = mnth, y = monthwise_totalrevenue), stat = "identity")
+data_with_month
+
+plot_with_ordmonth <-rcm %>%
+  group_by(ordmonth)%>%
+  summarize(ordmonth_totalrevenue = sum(TotalPrice))%>%
+  ggplot()+
+  geom_bar(mapping = aes(x = ordmonth, y = ordmonth_totalrevenue), stat = "identity")
+plot_with_ordmonth
+
+data_weekday <- rcm %>%
+  group_by(day_of_week)%>%
+  summarize(weekday_totalrevenue = sum(TotalPrice))%>%
+  ggplot()+
+  geom_bar(mapping = aes(x = day_of_week, y = weekday_totalrevenue), stat = "identity")
+data_weekday
+
+data_with_day <- rcm %>%
+  group_by(DisDate)%>%
+  summarize(daily_totalrevenue = sum(TotalPrice))%>%
+  ggplot()+
+  geom_bar(mapping = aes(x = DisDate, y = daily_totalrevenue), stat = "identity")
+data_with_day
+
+plot_with_week <- rcm %>%
+  group_by(wk)%>%
+  summarize(weekly_totalrevenue = sum(TotalPrice))%>%
+  ggplot()+
+  geom_bar(mapping = aes(x = wk, y = weekly_totalrevenue), stat = "identity")
+plot_with_week
+
+rcwk <-  select(rcm, 'wk', 'TotalPrice') 
+rcwkl <- aggregate(rcwk$TotalPrice, by=list(week=rcwk$wk), FUN=sum)
+
+rcwkTrain<- rcwkl[rcwkl$week<80, ]
+rcwkTest<- rcwkl[rcwkl$week>= 80, ]
+
+model1 <- lm(x~week, data=rcwkTrain) 
+summary(model1)
+
+prediction1 <- predict(model1, interval="prediction", newdata =rcwkTest)
+
+errors1 <- prediction1[,"fit"] - rcwkTest$x
+summary(errors1)
+
+hist(errors1)
+plot(errors1)
+
+rmse1 <- sqrt(sum((prediction1[,"fit"] - rcwkTest$x)^2)/nrow(rcwkTest))
+rmse1
+
+rcm2 <- select(rcm, 'TotalPrice', 'mnth', 'yr', 'dy', 'day_of_week', 'DisDate', 'wk', 'ordmonth') %>%
+  mutate(ordday = trunc((DisDate - ymd(20091201))/ddays(1))) %>%
+  mutate(dyofyr = yday(DisDate)) 
+
+summary(rcm2)
+
+rcmd <-  select(rcm2, 'TotalPrice', 'mnth', 'yr', 'dy', 'day_of_week', 'wk', 'ordmonth', 'ordday')
+rcmd1 <- aggregate(rcmd$TotalPrice, by=list(day=rcmd$ordday), FUN=sum)
+
+
+rcmd1Train<- rcmd1[rcmd1$day<584, ]
+rcmd1Test<- rcmd1[rcmd1$day>= 584, ]
+
+model2 <- lm(x~day, data=rcmd1Train) 
+summary(model2)
+
+prediction2 <- predict(model2, interval="prediction", newdata =rcmd1Test)
+
+errors2 <- prediction2[,"fit"] - rcmd1Test$x
+summary(errors2)
+
+hist(errors2)
+plot(errors2)
+
+rmse2 <- sqrt(sum((prediction2[,"fit"] - rcmd1Test$x)^2)/nrow(rcmd1Test))
+rmse2
+
+
+prediction2 <- predict(model2, interval="prediction", newdata =rcmd1Test)
+
+errors2 <- prediction2[,"fit"] - rcmd1Test$x
+summary(errors2)
+
+hist(errors2)
+plot(errors2)
+
+rmse2 <- sqrt(sum((prediction2[,"fit"] - rcmd1Test$x)^2)/nrow(rcmd1Test))
+rmse2
+
+
+rcmm <-  select(rcm2, 'TotalPrice', 'ordmonth')
+rcmm1 <- aggregate(rcmm$TotalPrice, by=list(month=rcmm$ordmonth), FUN=sum)
+
+tsData = ts(rcmm1$x, start = c(2009,12), frequency = 12)
+components.ts = decompose(tsData)
+plot(components.ts)
+
+auto.arima(tsData)
+
